@@ -175,14 +175,23 @@ where
                 .await
                 .unwrap();
 
-            // Get the interface and emit layout_updated signal
+            // Get the interface and emit layout_updated signal. The revision
+            // must be strictly increasing or KDE's tray applet (which caches
+            // the last fetched revision) will silently ignore the update and
+            // the rebuilt menu — including corrected checkable / radio
+            // toggle-state — never reaches the UI.
             if let Ok(iface) = connection
                 .object_server()
                 .interface::<_, crate::sys::dbus::DbusMenu<T>>("/MenuBar")
                 .await
             {
                 let emitter = iface.signal_emitter();
-                let _ = crate::sys::dbus::DbusMenu::<T>::layout_updated(&emitter, 0, 0).await;
+                let _ = crate::sys::dbus::DbusMenu::<T>::layout_updated(
+                    &emitter,
+                    crate::sys::dbus::next_layout_revision(),
+                    0,
+                )
+                .await;
             }
         });
 

@@ -187,6 +187,49 @@ where
                 }
             }
 
+            // macOS has no native radio menu item, so a Radio item degrades to
+            // an ordinary checkmark. Exclusivity is maintained by the
+            // application rebuilding the menu so only the selected item is
+            // checked — the same convention Apple's own menus use for
+            // exclusive choices (e.g. "View → Sort By").
+            MenuItem::Radio {
+                name,
+                is_checked,
+                id,
+                disabled,
+                ..
+            } => {
+                *j += 1;
+                map.insert(*j, id.clone());
+
+                let ns_title = NSString::from_str(name);
+                let empty_str = NSString::new();
+                let menu_item = unsafe {
+                    let allocated: Allocated<NSMenuItem> = msg_send![class!(NSMenuItem), alloc];
+                    let action_sel = Sel::register(c"menuItemClicked:");
+                    let menu_item: Retained<NSMenuItem> = msg_send![allocated,
+                        initWithTitle: &*ns_title,
+                        action: Some(action_sel),
+                        keyEquivalent: &*empty_str
+                    ];
+                    menu_item
+                };
+
+                unsafe {
+                    menu_item.setTag(*j as isize);
+                    menu_item.setTarget(Some(target));
+                    menu_item.setEnabled(!disabled);
+                    let _: () = msg_send![&menu_item, setState: if *is_checked { 1_isize } else { 0_isize }];
+                    menu.addItem(&menu_item);
+                }
+
+                // Add to menu_ids mapping
+                {
+                    let mut menu_ids_lock = menu_ids.lock().unwrap();
+                    menu_ids_lock.insert(*j as isize, id.clone());
+                }
+            }
+
             MenuItem::Item {
                 name, id, disabled, ..
             } => {

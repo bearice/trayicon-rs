@@ -102,6 +102,18 @@ where
             hmenu.add_checkable_item(&name, *is_checked, *j, *disabled);
         }
 
+        MenuItem::Radio {
+            name,
+            is_checked,
+            id,
+            disabled,
+            ..
+        } => {
+            *j += 1;
+            map.insert(*j, id.clone());
+            hmenu.add_radio_item(&name, *is_checked, *j, *disabled);
+        }
+
         MenuItem::Item {
             name, id, disabled, ..
         } => {

@@ -14,6 +14,11 @@ pub struct MenuItemData<T: TrayIconEvent> {
     pub event_id: Option<T>,
     pub is_separator: bool,
     pub is_checkable: bool,
+    /// When true this is a mutually-exclusive radio item: a `toggle-type` of
+    /// `"radio"` is exported over D-Bus instead of `"checkbox"`, and clicking
+    /// it clears the other radio items in its group. Only meaningful together
+    /// with `is_checkable`.
+    pub is_radio: bool,
     pub is_checked: bool,
     pub is_disabled: bool,
     pub children: Vec<MenuItemData<T>>,
@@ -139,6 +144,7 @@ where
             event_id: None,
             is_separator: true,
             is_checkable: false,
+            is_radio: false,
             is_checked: false,
             is_disabled: false,
             children: vec![],
@@ -151,6 +157,7 @@ where
             event_id: Some(id.clone()),
             is_separator: false,
             is_checkable: false,
+            is_radio: false,
             is_checked: false,
             is_disabled: *disabled,
             children: vec![],
@@ -167,6 +174,24 @@ where
             event_id: Some(id.clone()),
             is_separator: false,
             is_checkable: true,
+            is_radio: false,
+            is_checked: *is_checked,
+            is_disabled: *disabled,
+            children: vec![],
+        }),
+        MenuItem::Radio {
+            id,
+            name,
+            is_checked,
+            disabled,
+            ..
+        } => Ok(MenuItemData {
+            id: current_id,
+            label: name.clone(),
+            event_id: Some(id.clone()),
+            is_separator: false,
+            is_checkable: true,
+            is_radio: true,
             is_checked: *is_checked,
             is_disabled: *disabled,
             children: vec![],
@@ -188,6 +213,7 @@ where
                 event_id: None,
                 is_separator: false,
                 is_checkable: false,
+                is_radio: false,
                 is_checked: false,
                 is_disabled: *disabled,
                 children: child_items,

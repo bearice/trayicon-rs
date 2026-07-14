@@ -19,6 +19,24 @@ where
         disabled: bool,
         icon: Option<Icon>,
     },
+    /// A mutually-exclusive selectable item.
+    ///
+    /// Radio items behave like checkable items for state purposes (one is
+    /// `is_checked`), but the tray host renders them as a radio-button group:
+    /// selecting one clears the others in the same group. A group is the
+    /// maximal run of consecutive `Radio` items within the same (sub)menu; a
+    /// separator or any other item kind breaks the run.
+    ///
+    /// On platforms without a native radio menu item (macOS) a `Radio` item
+    /// degrades to an ordinary checkmark; the application is still expected to
+    /// rebuild the menu so only the selected item is checked.
+    Radio {
+        id: T,
+        name: String,
+        is_checked: bool,
+        disabled: bool,
+        icon: Option<Icon>,
+    },
     Submenu {
         id: Option<T>,
         name: String,
@@ -88,6 +106,22 @@ where
         self
     }
 
+    /// Add a mutually-exclusive selectable (radio) item.
+    ///
+    /// Consecutive `radio` items within the same (sub)menu form a radio group.
+    /// Only one item in a group should be `is_checked == true`. See
+    /// [`MenuItem::Radio`] for the grouping and platform-degradation rules.
+    pub fn radio(mut self, name: &str, is_checked: bool, id: T) -> Self {
+        self.menu_items.push(MenuItem::Radio {
+            id,
+            name: name.to_string(),
+            is_checked,
+            disabled: false,
+            icon: None,
+        });
+        self
+    }
+
     pub fn submenu(mut self, name: &str, menu: MenuBuilder<T>) -> Self {
         self.menu_items.push(MenuItem::Submenu {
             id: None,
@@ -110,7 +144,7 @@ where
     pub(crate) fn get_checkable(&mut self, find_id: T) -> Option<bool> {
         let mut found_item = None;
         let _ = self.mutate_item(find_id, |i| {
-            if let MenuItem::Checkable { is_checked, .. } = i {
+            if let MenuItem::Checkable { is_checked, .. } | MenuItem::Radio { is_checked, .. } = i {
                 found_item = Some(*is_checked);
                 Ok(())
             } else {
@@ -125,7 +159,7 @@ where
     /// Prefer building a new menu instead of mutating it with this method.
     pub(crate) fn set_checkable(&mut self, id: T, checked: bool) -> Result<(), Error> {
         self.mutate_item(id, |i| {
-            if let MenuItem::Checkable { is_checked, .. } = i {
+            if let MenuItem::Checkable { is_checked, .. } | MenuItem::Radio { is_checked, .. } = i {
                 *is_checked = checked;
                 Ok(())
             } else {
@@ -144,6 +178,10 @@ where
                 Ok(())
             }
             MenuItem::Checkable { disabled: d, .. } => {
+                *d = disabled;
+                Ok(())
+            }
+            MenuItem::Radio { disabled: d, .. } => {
                 *d = disabled;
                 Ok(())
             }
@@ -174,6 +212,7 @@ where
         let found_item = self.menu_items.iter_mut().find(|f| match f {
             MenuItem::Item { id, .. } if id == &find_id => true,
             MenuItem::Checkable { id, .. } if id == &find_id => true,
+            MenuItem::Radio { id, .. } if id == &find_id => true,
             MenuItem::Submenu { id, .. } if id.as_ref() == Some(&find_id) => true,
             _ => false,
         });

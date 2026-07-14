@@ -25,6 +25,71 @@ enum UserEvents {
     SubItem1,
     SubItem2,
     SubItem3,
+    // Mutually-exclusive radio options. Two independent groups live in one
+    // submenu, split by a separator — each group is exclusive within itself.
+    RadioRed,
+    RadioGreen,
+    RadioBlue,
+    RadioCircle,
+    RadioSquare,
+    RadioTriangle,
+}
+
+fn build_menu(
+    selected_color: &UserEvents,
+    selected_shape: &UserEvents,
+    disabled_item_icon: Option<Icon>,
+) -> MenuBuilder<UserEvents> {
+    MenuBuilder::new()
+        .item("Item 4 Set Tooltip", UserEvents::Item4)
+        .item("Item 3 Replace Menu 👍", UserEvents::Item3)
+        .item("Item 2 Change Icon Green", UserEvents::Item2)
+        .item("Item 1 Change Icon Red", UserEvents::Item1)
+        .submenu(
+            "Set Status (KDE only feature)",
+            MenuBuilder::new()
+                .item("Active (Normal)", UserEvents::StatusActive)
+                .item("NeedsAttention (Blink)", UserEvents::StatusNeedsAttention)
+                .item("Passive (Hide behind arrow)", UserEvents::StatusPassive),
+        )
+        .separator()
+        .submenu(
+            "Sub Menu",
+            MenuBuilder::new()
+                .item("Sub item 1", UserEvents::SubItem1)
+                .item("Sub Item 2", UserEvents::SubItem2)
+                .item("Sub Item 3", UserEvents::SubItem3),
+        )
+        // Two radio groups in a single submenu. A group is a maximal run of
+        // consecutive `radio` items; the `separator()` between them splits
+        // them into two independent groups, each exclusive within itself.
+        // (Without the separator the six items would form one group.)
+        .submenu(
+            "Radio Groups",
+            MenuBuilder::new()
+                // Group 1: color.
+                .radio("Red", *selected_color == UserEvents::RadioRed, UserEvents::RadioRed)
+                .radio("Green", *selected_color == UserEvents::RadioGreen, UserEvents::RadioGreen)
+                .radio("Blue", *selected_color == UserEvents::RadioBlue, UserEvents::RadioBlue)
+                .separator()
+                // Group 2: shape.
+                .radio("Circle", *selected_shape == UserEvents::RadioCircle, UserEvents::RadioCircle)
+                .radio("Square", *selected_shape == UserEvents::RadioSquare, UserEvents::RadioSquare)
+                .radio("Triangle", *selected_shape == UserEvents::RadioTriangle, UserEvents::RadioTriangle),
+        )
+        .checkable(
+            "This checkbox toggles disable",
+            true,
+            UserEvents::CheckItem1,
+        )
+        .with(MenuItem::Item {
+            name: "Item Disabled".into(),
+            disabled: true, // Disabled entry example
+            id: UserEvents::DisabledItem1,
+            icon: disabled_item_icon,
+        })
+        .separator()
+        .item("E&xit", UserEvents::Exit)
 }
 
 fn main() {
@@ -35,6 +100,10 @@ fn main() {
     let icon2 = include_bytes!("../../../src/testresource/icon2.ico");
     let second_icon = Icon::from_buffer(icon2, None, None).unwrap();
     let first_icon = Icon::from_buffer(icon, None, None).unwrap();
+    let disabled_item_icon = Result::ok(Icon::from_buffer(icon, None, None));
+
+    let selected_color = UserEvents::RadioRed;
+    let selected_shape = UserEvents::RadioCircle;
 
     // Needlessly complicated tray icon with all the whistles and bells
     let tray_icon = TrayIconBuilder::new()
@@ -48,41 +117,7 @@ fn main() {
         .on_click(UserEvents::LeftClickTrayIcon)
         .on_double_click(UserEvents::DoubleClickTrayIcon)
         .on_right_click(UserEvents::RightClickTrayIcon)
-        .menu(
-            MenuBuilder::new()
-                .item("Item 4 Set Tooltip", UserEvents::Item4)
-                .item("Item 3 Replace Menu 👍", UserEvents::Item3)
-                .item("Item 2 Change Icon Green", UserEvents::Item2)
-                .item("Item 1 Change Icon Red", UserEvents::Item1)
-                .submenu(
-                    "Set Status (KDE only feature)",
-                    MenuBuilder::new()
-                        .item("Active (Normal)", UserEvents::StatusActive)
-                        .item("NeedsAttention (Blink)", UserEvents::StatusNeedsAttention)
-                        .item("Passive (Hide behind arrow)", UserEvents::StatusPassive),
-                )
-                .separator()
-                .submenu(
-                    "Sub Menu",
-                    MenuBuilder::new()
-                        .item("Sub item 1", UserEvents::SubItem1)
-                        .item("Sub Item 2", UserEvents::SubItem2)
-                        .item("Sub Item 3", UserEvents::SubItem3),
-                )
-                .checkable(
-                    "This checkbox toggles disable",
-                    true,
-                    UserEvents::CheckItem1,
-                )
-                .with(MenuItem::Item {
-                    name: "Item Disabled".into(),
-                    disabled: true, // Disabled entry example
-                    id: UserEvents::DisabledItem1,
-                    icon: Result::ok(Icon::from_buffer(icon, None, None)),
-                })
-                .separator()
-                .item("E&xit", UserEvents::Exit),
-        )
+        .menu(build_menu(&selected_color, &selected_shape, disabled_item_icon.clone()))
         .build()
         .unwrap();
 
@@ -91,6 +126,9 @@ fn main() {
         tray_icon,
         first_icon,
         second_icon,
+        selected_color,
+        selected_shape,
+        disabled_item_icon,
     };
     event_loop.run_app(&mut app).unwrap();
 }
@@ -100,6 +138,9 @@ struct MyApplication {
     tray_icon: TrayIcon<UserEvents>,
     first_icon: Icon,
     second_icon: Icon,
+    selected_color: UserEvents,
+    selected_shape: UserEvents,
+    disabled_item_icon: Option<Icon>,
 }
 
 impl ApplicationHandler<UserEvents> for MyApplication {
@@ -193,6 +234,33 @@ impl ApplicationHandler<UserEvents> for MyApplication {
             }
             UserEvents::StatusPassive => {
                 self.tray_icon.set_status(TrayIconStatus::Passive).unwrap();
+            }
+            // Selecting a color radio rebuilds the menu so only that option in
+            // the color group is checked. The shape group is untouched because
+            // the groups are independent (separated by a separator).
+            UserEvents::RadioRed | UserEvents::RadioGreen | UserEvents::RadioBlue => {
+                self.selected_color = event.clone();
+                self.tray_icon
+                    .set_menu(&build_menu(
+                        &self.selected_color,
+                        &self.selected_shape,
+                        self.disabled_item_icon.clone(),
+                    ))
+                    .unwrap();
+                println!("Color selected: {:?}", event);
+            }
+            // Selecting a shape radio is handled the same way; only the shape
+            // group's selection changes, the color group keeps its selection.
+            UserEvents::RadioCircle | UserEvents::RadioSquare | UserEvents::RadioTriangle => {
+                self.selected_shape = event.clone();
+                self.tray_icon
+                    .set_menu(&build_menu(
+                        &self.selected_color,
+                        &self.selected_shape,
+                        self.disabled_item_icon.clone(),
+                    ))
+                    .unwrap();
+                println!("Shape selected: {:?}", event);
             }
             // Events::DoubleClickTrayIcon => todo!(),
             // Events::DisabledItem1 => todo!(),

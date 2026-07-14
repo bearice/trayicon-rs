@@ -5,6 +5,7 @@ use super::kdeicon::KdeIcon;
 pub use canonical_dbus_menu::*;
 pub use status_notifier_item::{StatusNotifierEvent, StatusNotifierItemImpl};
 pub use status_notifier_watcher::StatusNotifierWatcherProxy;
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{Arc, LazyLock, Mutex};
 use zbus::names::OwnedWellKnownName;
 
@@ -18,6 +19,28 @@ static DBUS_CONNECTION: LazyLock<zbus::Connection> = LazyLock::new(|| {
 
 pub fn get_dbus_connection() -> &'static zbus::Connection {
     &DBUS_CONNECTION
+}
+
+/// Monotonically increasing layout revision.
+///
+/// The com.canonical.dbusmenu spec requires `LayoutUpdated` to carry a
+/// strictly increasing `revision`. Tray hosts (e.g. KDE's system tray applet)
+/// cache the last revision they fetched and *ignore* `LayoutUpdated` signals
+/// whose revision is not greater than the cached one. Previously this crate
+/// always emitted revision 0, so the host fetched the layout once and then
+/// ignored every subsequent rebuild — meaning `set_menu` updates (including
+/// corrected checkable / radio toggle-state) never reached the UI. The
+/// result was that mutually-exclusive items appeared to accumulate checks
+/// instead of being exclusive.
+///
+/// There is exactly one menu per process, so a single process-global counter
+/// is sufficient.
+static LAYOUT_REVISION: AtomicU32 = AtomicU32::new(0);
+
+/// Return the next layout revision, strictly greater than every revision
+/// previously handed out.
+pub fn next_layout_revision() -> u32 {
+    LAYOUT_REVISION.fetch_add(1, Ordering::SeqCst) + 1
 }
 
 pub fn register_dbus_menu_blocking<T>(connection: &zbus::Connection, menu_sys: super::MenuSys<T>)
