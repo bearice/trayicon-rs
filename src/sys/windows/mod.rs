@@ -15,6 +15,16 @@ use winnotifyicon::WinNotifyIcon;
 pub use winhicon::WinHIcon as IconSys;
 pub use wintrayicon::WinTrayIcon as TrayIconSys;
 
+/// A radio group: the submenu that owns the items plus the inclusive command-id
+/// range of the consecutive radio run. `CheckMenuRadioItem` is invoked with
+/// `MF_BYCOMMAND` over `[first, last]` to enforce a single selection.
+#[derive(Debug, Clone, Copy)]
+struct RadioGroup {
+    hmenu: usize,
+    first: u32,
+    last: u32,
+}
+
 #[derive(Debug)]
 pub struct MenuSys<T>
 where
@@ -22,6 +32,9 @@ where
 {
     ids: HashMap<usize, T>,
     menu: WinHMenu,
+    /// Command id of every radio item -> the group it belongs to. Used on
+    /// `WM_COMMAND` to apply native exclusivity via `CheckMenuRadioItem`.
+    radio: HashMap<usize, RadioGroup>,
 }
 
 /// Build the tray icon
@@ -72,6 +85,40 @@ where
 {
     let mut hmenu = WinHMenu::new()?;
     let mut map: HashMap<usize, T> = HashMap::new();
+    let mut radio: HashMap<usize, RadioGroup> = HashMap::new();
+    // Current consecutive radio run, if any: its first and last assigned
+    // command id. A non-radio item (or separator) closes the run and records
+    // the group.
+    let mut run_first: Option<usize> = None;
+    let mut run_last: Option<usize> = None;
+    // HMENU address for the run being accumulated — the current (sub)menu.
+    let hmenu_addr = hmenu.handle() as usize;
+
+    // Close the in-progress radio run, recording its group for every command
+    // id it covers (which are consecutive: `j` advances by exactly one per
+    // radio item, and separators consume no id). Defined as a nested `fn` so
+    // it captures nothing and there is no borrow entanglement with the
+    // surrounding `for_each` closure.
+    fn close_run(
+        run_first: &mut Option<usize>,
+        run_last: &mut Option<usize>,
+        radio: &mut HashMap<usize, RadioGroup>,
+        hmenu_addr: usize,
+    ) {
+        if let (Some(first), Some(last)) = (*run_first, *run_last) {
+            let group = RadioGroup {
+                hmenu: hmenu_addr,
+                first: first as u32,
+                last: last as u32,
+            };
+            for cmd in first..=last {
+                radio.insert(cmd, group);
+            }
+        }
+        *run_first = None;
+        *run_last = None;
+    }
+
     builder.menu_items.iter().for_each(|item| match item {
         MenuItem::Submenu {
             id,
@@ -80,12 +127,14 @@ where
             disabled,
             ..
         } => {
+            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
             if let Some(id) = id {
                 *j += 1;
                 map.insert(*j, id.clone());
             }
             if let Ok(menusys) = build_menu_inner(j, children) {
                 map.extend(menusys.ids.into_iter());
+                radio.extend(menusys.radio.into_iter());
                 hmenu.add_child_menu(&name, menusys.menu, *disabled);
             }
         }
@@ -97,6 +146,7 @@ where
             disabled,
             ..
         } => {
+            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
             *j += 1;
             map.insert(*j, id.clone());
             hmenu.add_checkable_item(&name, *is_checked, *j, *disabled);
@@ -110,26 +160,37 @@ where
             ..
         } => {
             *j += 1;
-            map.insert(*j, id.clone());
-            hmenu.add_radio_item(&name, *is_checked, *j, *disabled);
+            let cmd = *j;
+            map.insert(cmd, id.clone());
+            hmenu.add_radio_item(&name, *is_checked, cmd, *disabled);
+            if run_first.is_none() {
+                run_first = Some(cmd);
+            }
+            run_last = Some(cmd);
         }
 
         MenuItem::Item {
             name, id, disabled, ..
         } => {
+            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
             *j += 1;
             map.insert(*j, id.clone());
             hmenu.add_menu_item(&name, *j, *disabled);
         }
 
         MenuItem::Separator => {
+            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
             hmenu.add_separator();
         }
     });
 
+    // Close a run that runs to the end of the (sub)menu.
+    close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
+
     Ok(MenuSys {
         ids: map,
         menu: hmenu,
+        radio,
     })
 }
 

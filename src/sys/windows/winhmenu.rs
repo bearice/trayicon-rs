@@ -67,10 +67,10 @@ impl WinHMenu {
     /// Add a mutually-exclusive radio item.
     ///
     /// Uses `MFT_RADIOCHECK` so the item is rendered with a radio-button
-    /// glyph instead of a checkmark. Exclusivity within a group of
-    /// consecutive radio items is handled by the application rebuilding the
-    /// menu so only the selected item has `is_checked == true` (the same
-    /// model already used for plain `Checkable` items on Windows).
+    /// glyph instead of a checkmark. Exclusivity within a group of consecutive
+    /// radio items is enforced natively on selection via `CheckMenuRadioItem`
+    /// (see `MenuSys`), so applications do not have to rebuild the menu to keep
+    /// a single selection per group.
     pub fn add_radio_item(
         &self,
         name: &str,
@@ -141,6 +141,12 @@ impl WinHMenu {
 
     pub fn track(&self, hwnd: HWND, x: i32, y: i32) {
         unsafe { winuser::TrackPopupMenu(self.hmenu, 0, x, y, 0, hwnd, std::ptr::null_mut()) };
+    }
+
+    /// The underlying `HMENU` handle, for use with menu APIs such as
+    /// `CheckMenuRadioItem` that need to operate on a specific (sub)menu.
+    pub(crate) fn handle(&self) -> HMENU {
+        self.hmenu
     }
 }
 

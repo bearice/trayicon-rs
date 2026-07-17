@@ -43,6 +43,19 @@ pub fn next_layout_revision() -> u32 {
     LAYOUT_REVISION.fetch_add(1, Ordering::SeqCst) + 1
 }
 
+/// Return the most recently handed-out layout revision.
+///
+/// `GetLayout` must return the revision of the layout it is handing back, and
+/// that revision must match the one carried by the corresponding
+/// `LayoutUpdated` signal. Revision-aware hosts (KDE among them) cache the last
+/// revision they fetched and ignore later `LayoutUpdated` signals whose
+/// revision is not greater; if `GetLayout` reports a stale or constant
+/// revision, a later update can be misordered or dropped. Returning the live
+/// counter here keeps `GetLayout` and `LayoutUpdated` in agreement.
+pub fn current_layout_revision() -> u32 {
+    LAYOUT_REVISION.load(Ordering::SeqCst)
+}
+
 pub fn register_dbus_menu_blocking<T>(connection: &zbus::Connection, menu_sys: super::MenuSys<T>)
 where
     T: crate::TrayIconEvent,

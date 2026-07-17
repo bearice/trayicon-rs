@@ -227,7 +227,7 @@ where
             let children = self.build_layout_from_items(&menu_sys.items);
 
             Ok((
-                0,
+                super::current_layout_revision(),
                 Layout {
                     id: parent_id,
                     properties: HashMap::new(),
@@ -240,7 +240,7 @@ where
                 let children = self.build_layout_from_items(&item.children);
 
                 Ok((
-                    0,
+                    super::current_layout_revision(),
                     Layout {
                         id: parent_id,
                         properties: HashMap::new(),

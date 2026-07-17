@@ -218,6 +218,21 @@ where
                 // Menu command
                 if cmd == 0 {
                     if let Some(v) = self.menu.as_ref() {
+                        // Enforce radio-group exclusivity natively: checking one
+                        // radio item clears its group siblings. This honors the
+                        // public contract (selecting a radio clears its peers)
+                        // without requiring the application to rebuild the menu.
+                        if let Some(group) = v.radio.get(&(identifier as usize)) {
+                            unsafe {
+                                winuser::CheckMenuRadioItem(
+                                    group.hmenu as HMENU,
+                                    group.first,
+                                    group.last,
+                                    identifier as u32,
+                                    winuser::MF_BYCOMMAND,
+                                );
+                            }
+                        }
                         if let Some(event) = v.ids.get(&(identifier as usize)) {
                             self.sender.send(event);
                         }
