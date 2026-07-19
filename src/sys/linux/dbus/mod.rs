@@ -56,18 +56,23 @@ pub fn current_layout_revision() -> u32 {
     LAYOUT_REVISION.load(Ordering::SeqCst)
 }
 
-pub fn register_dbus_menu_blocking<T>(connection: &zbus::Connection, menu_sys: super::MenuSys<T>)
+pub fn register_dbus_menu_blocking<T>(
+    connection: &zbus::Connection,
+    menu_sys: super::MenuSys<T>,
+    menu_state: crate::SharedMenu<T>,
+) -> Result<(), crate::Error>
 where
     T: crate::TrayIconEvent,
 {
-    return futures::executor::block_on(async {
-        let dbus_menu = DbusMenu::new(menu_sys);
-        let _ = connection
+    futures::executor::block_on(async {
+        let dbus_menu = DbusMenu::new(menu_sys, menu_state);
+        connection
             .object_server()
             .at("/MenuBar", dbus_menu)
             .await
-            .unwrap();
-    });
+            .map(|_| ())
+            .map_err(|_| crate::Error::OsError)
+    })
 }
 
 pub fn register_notifier_item_watcher_blocking(

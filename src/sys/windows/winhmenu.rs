@@ -71,13 +71,7 @@ impl WinHMenu {
     /// radio items is enforced natively on selection via `CheckMenuRadioItem`
     /// (see `MenuSys`), so applications do not have to rebuild the menu to keep
     /// a single selection per group.
-    pub fn add_radio_item(
-        &self,
-        name: &str,
-        is_checked: bool,
-        id: usize,
-        disabled: bool,
-    ) -> bool {
+    pub fn add_radio_item(&self, name: &str, is_checked: bool, id: usize, disabled: bool) -> bool {
         let label = wchar(name);
 
         // MFS_ENABLED / MFT_STRING are zero, so we only set the flags that
@@ -94,10 +88,8 @@ impl WinHMenu {
 
         let mut info: winuser::MENUITEMINFOW = unsafe { std::mem::zeroed() };
         info.cbSize = std::mem::size_of::<winuser::MENUITEMINFOW>() as u32;
-        info.fMask = winuser::MIIM_FTYPE
-            | winuser::MIIM_STATE
-            | winuser::MIIM_ID
-            | winuser::MIIM_STRING;
+        info.fMask =
+            winuser::MIIM_FTYPE | winuser::MIIM_STATE | winuser::MIIM_ID | winuser::MIIM_STRING;
         info.fType = winuser::MFT_RADIOCHECK;
         info.fState = state;
         info.wID = id as u32;

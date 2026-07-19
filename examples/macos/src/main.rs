@@ -27,7 +27,11 @@ enum Events {
     RadioTriangle,
 }
 
-fn build_menu(checked: bool, selected_color: Events, selected_shape: Events) -> MenuBuilder<Events> {
+fn build_menu(
+    checked: bool,
+    selected_color: Events,
+    selected_shape: Events,
+) -> MenuBuilder<Events> {
     MenuBuilder::new()
         .item("Item 1", Events::Item1)
         .item("Item 2", Events::Item2)
@@ -49,12 +53,32 @@ fn build_menu(checked: bool, selected_color: Events, selected_shape: Events) -> 
             "Radio Groups",
             MenuBuilder::new()
                 .radio("Red", selected_color == Events::RadioRed, Events::RadioRed)
-                .radio("Green", selected_color == Events::RadioGreen, Events::RadioGreen)
-                .radio("Blue", selected_color == Events::RadioBlue, Events::RadioBlue)
+                .radio(
+                    "Green",
+                    selected_color == Events::RadioGreen,
+                    Events::RadioGreen,
+                )
+                .radio(
+                    "Blue",
+                    selected_color == Events::RadioBlue,
+                    Events::RadioBlue,
+                )
                 .separator()
-                .radio("Circle", selected_shape == Events::RadioCircle, Events::RadioCircle)
-                .radio("Square", selected_shape == Events::RadioSquare, Events::RadioSquare)
-                .radio("Triangle", selected_shape == Events::RadioTriangle, Events::RadioTriangle),
+                .radio(
+                    "Circle",
+                    selected_shape == Events::RadioCircle,
+                    Events::RadioCircle,
+                )
+                .radio(
+                    "Square",
+                    selected_shape == Events::RadioSquare,
+                    Events::RadioSquare,
+                )
+                .radio(
+                    "Triangle",
+                    selected_shape == Events::RadioTriangle,
+                    Events::RadioTriangle,
+                ),
         )
         .separator()
         .item("Exit", Events::Exit)

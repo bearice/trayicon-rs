@@ -23,20 +23,22 @@ pub struct DbusMenu<T>
 where
     T: crate::TrayIconEvent,
 {
-    // Shared and lockable so the `event` handler can mutate the checkable
-    // (`is_checked`) state authoritatively, instead of relying on the tray
-    // host's optimistic client-side toggle. This keeps the server the source
-    // of truth for checkable / radio items.
+    // Serialized D-Bus view of the authoritative MenuBuilder below. Radio
+    // clicks update both representations before the application sees them.
     menu_sys: Arc<RwLock<super::super::MenuSys<T>>>,
+    // Shared with TrayIcon and the other platform adapters; getters, setters,
+    // rebuilds, and native clicks all observe the same runtime model.
+    menu_state: crate::SharedMenu<T>,
 }
 
 impl<T> DbusMenu<T>
 where
     T: crate::TrayIconEvent,
 {
-    pub fn new(menu_sys: super::super::MenuSys<T>) -> Self {
+    pub fn new(menu_sys: super::super::MenuSys<T>, menu_state: crate::SharedMenu<T>) -> Self {
         DbusMenu {
             menu_sys: Arc::new(RwLock::new(menu_sys)),
+            menu_state,
         }
     }
 
@@ -126,78 +128,22 @@ where
         None
     }
 
-    /// Mutable counterpart of [`find_item_by_id`].
-    fn find_item_by_id_mut<'a>(
-        id: i32,
-        items: &'a mut [super::super::MenuItemData<T>],
-    ) -> Option<&'a mut super::super::MenuItemData<T>> {
-        for item in items {
-            if item.id == id {
-                return Some(item);
-            }
-            if !item.children.is_empty() {
-                if let Some(found) = Self::find_item_by_id_mut(id, &mut item.children) {
-                    return Some(found);
-                }
-            }
-        }
-        None
-    }
-
-    /// Enforce radio-group exclusivity for the item `target_id` within one
-    /// level of `siblings`. A group is the maximal run of consecutive radio
-    /// items containing `target_id`. Returns `Some((event_id, changed))` when
-    /// `target_id` is a radio item in this level, where `changed` lists every
-    /// item whose `is_checked` actually flipped (id, new state).
-    fn select_radio_in_siblings(
-        target_id: i32,
-        siblings: &mut [super::super::MenuItemData<T>],
-    ) -> Option<(Option<T>, Vec<(i32, bool)>)> {
-        let pos = siblings.iter().position(|i| i.id == target_id)?;
-        if !siblings[pos].is_radio {
-            return None;
-        }
-
-        let n = siblings.len();
-        let mut start = pos;
-        while start > 0 && siblings[start - 1].is_radio {
-            start -= 1;
-        }
-        let mut end = pos;
-        while end + 1 < n && siblings[end + 1].is_radio {
-            end += 1;
-        }
-
-        let mut changed = Vec::new();
-        for i in start..=end {
-            let want = siblings[i].id == target_id;
-            if siblings[i].is_checked != want {
-                siblings[i].is_checked = want;
-                changed.push((siblings[i].id, want));
-            }
-        }
-
-        let event_id = siblings[pos].event_id.clone();
-        Some((event_id, changed))
-    }
-
-    /// Recursively locate the radio group containing `target_id` anywhere in
-    /// the menu tree and enforce exclusivity within it.
-    fn apply_radio_selection(
-        target_id: i32,
+    /// Apply authoritative MenuBuilder state changes to the serialized D-Bus
+    /// view and return the numeric ids whose properties changed.
+    fn apply_checked_changes(
         items: &mut [super::super::MenuItemData<T>],
-    ) -> Option<(Option<T>, Vec<(i32, bool)>)> {
-        if let Some(result) = Self::select_radio_in_siblings(target_id, items) {
-            return Some(result);
-        }
-        for item in items.iter_mut() {
-            if !item.children.is_empty() {
-                if let Some(result) = Self::apply_radio_selection(target_id, &mut item.children) {
-                    return Some(result);
+        changes: &[(T, bool)],
+        updated: &mut Vec<(i32, bool)>,
+    ) {
+        for item in items {
+            if let Some(event_id) = item.event_id.as_ref() {
+                if let Some((_, checked)) = changes.iter().find(|(id, _)| id == event_id) {
+                    item.is_checked = *checked;
+                    updated.push((item.id, *checked));
                 }
             }
+            Self::apply_checked_changes(&mut item.children, changes, updated);
         }
-        None
     }
 
     fn toggle_state_value(checked: bool) -> OwnedValue {
@@ -273,10 +219,14 @@ where
             match name.as_str() {
                 "label" => Ok(OwnedValue::try_from(Value::new(item.label.as_str())).unwrap()),
                 "enabled" => Ok(OwnedValue::try_from(Value::new(!item.is_disabled)).unwrap()),
-                "toggle-type" if item.is_checkable => Ok(OwnedValue::try_from(Value::new(
-                    if item.is_radio { "radio" } else { "checkbox" },
-                ))
-                .unwrap()),
+                "toggle-type" if item.is_checkable => {
+                    Ok(OwnedValue::try_from(Value::new(if item.is_radio {
+                        "radio"
+                    } else {
+                        "checkbox"
+                    }))
+                    .unwrap())
+                }
                 "toggle-state" if item.is_checkable => {
                     Ok(Self::toggle_state_value(item.is_checked))
                 }
@@ -306,31 +256,42 @@ where
             return Ok(());
         }
 
-        // Update the toggle-state authoritatively on the server side so the
-        // tray host does not have to guess:
-        //  * a radio item selects itself and clears its radio group,
-        //  * a checkbox item toggles,
-        //  * a plain item changes nothing.
-        let (event_to_send, changed) = {
-            let mut menu_sys = self
+        let (event_to_send, is_radio) = {
+            let menu_sys = self
                 .menu_sys
-                .write()
+                .read()
                 .map_err(|_| zbus::fdo::Error::Failed("menu lock poisoned".to_string()))?;
-
-            if let Some((event_id, changed)) = Self::apply_radio_selection(id, &mut menu_sys.items)
-            {
-                (event_id, changed)
-            } else {
-                match Self::find_item_by_id_mut(id, &mut menu_sys.items) {
-                    Some(it) if it.is_checkable => {
-                        it.is_checked = !it.is_checked;
-                        (it.event_id.clone(), vec![(it.id, it.is_checked)])
-                    }
-                    Some(it) => (it.event_id.clone(), Vec::new()),
-                    None => (None, Vec::new()),
-                }
+            match self.find_item_by_id(id, &menu_sys.items) {
+                Some(item) => (item.event_id.clone(), item.is_radio),
+                None => (None, false),
             }
         };
+
+        // MenuBuilder owns the radio invariant. The D-Bus tree is only a view
+        // and receives the exact changes returned by that one operation.
+        let mut changed = Vec::new();
+        if is_radio {
+            if let Some(event) = &event_to_send {
+                let model_changes = {
+                    let mut menu = self
+                        .menu_state
+                        .write()
+                        .map_err(|_| zbus::fdo::Error::Failed("menu lock poisoned".to_string()))?;
+                    let menu = menu.as_mut().ok_or_else(|| {
+                        zbus::fdo::Error::Failed("menu state missing".to_string())
+                    })?;
+                    menu.select_radio(event)
+                        .map_err(|_| zbus::fdo::Error::Failed("radio item not found".to_string()))?
+                };
+                if !model_changes.is_empty() {
+                    let mut menu_sys = self
+                        .menu_sys
+                        .write()
+                        .map_err(|_| zbus::fdo::Error::Failed("menu lock poisoned".to_string()))?;
+                    Self::apply_checked_changes(&mut menu_sys.items, &model_changes, &mut changed);
+                }
+            }
+        }
 
         // Push the corrected toggle-state(s) to the host immediately and bump
         // the layout revision so any cached layout is invalidated.
@@ -339,20 +300,18 @@ where
                 .iter()
                 .map(|(tid, checked)| {
                     let mut props = HashMap::new();
-                    props.insert("toggle-state".to_string(), Self::toggle_state_value(*checked));
+                    props.insert(
+                        "toggle-state".to_string(),
+                        Self::toggle_state_value(*checked),
+                    );
                     (*tid, props)
                 })
                 .collect();
 
-            if let Ok(iface) = conn
-                .object_server()
-                .interface::<_, Self>("/MenuBar")
-                .await
-            {
+            if let Ok(iface) = conn.object_server().interface::<_, Self>("/MenuBar").await {
                 let emitter = iface.signal_emitter();
-                let _ =
-                    Self::items_properties_updated(&emitter, updated, Vec::new()).await;
-                let _ = Self::layout_updated(&emitter, super::next_layout_revision(), 0).await;
+                let _ = Self::items_properties_updated(emitter, updated, Vec::new()).await;
+                let _ = Self::layout_updated(emitter, super::next_layout_revision(), 0).await;
             }
         }
 

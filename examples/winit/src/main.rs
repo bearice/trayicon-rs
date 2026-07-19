@@ -38,6 +38,8 @@ enum UserEvents {
 fn build_menu(
     selected_color: &UserEvents,
     selected_shape: &UserEvents,
+    check_item_checked: bool,
+    disabled_item_disabled: bool,
     disabled_item_icon: Option<Icon>,
 ) -> MenuBuilder<UserEvents> {
     MenuBuilder::new()
@@ -68,23 +70,47 @@ fn build_menu(
             "Radio Groups",
             MenuBuilder::new()
                 // Group 1: color.
-                .radio("Red", *selected_color == UserEvents::RadioRed, UserEvents::RadioRed)
-                .radio("Green", *selected_color == UserEvents::RadioGreen, UserEvents::RadioGreen)
-                .radio("Blue", *selected_color == UserEvents::RadioBlue, UserEvents::RadioBlue)
+                .radio(
+                    "Red",
+                    *selected_color == UserEvents::RadioRed,
+                    UserEvents::RadioRed,
+                )
+                .radio(
+                    "Green",
+                    *selected_color == UserEvents::RadioGreen,
+                    UserEvents::RadioGreen,
+                )
+                .radio(
+                    "Blue",
+                    *selected_color == UserEvents::RadioBlue,
+                    UserEvents::RadioBlue,
+                )
                 .separator()
                 // Group 2: shape.
-                .radio("Circle", *selected_shape == UserEvents::RadioCircle, UserEvents::RadioCircle)
-                .radio("Square", *selected_shape == UserEvents::RadioSquare, UserEvents::RadioSquare)
-                .radio("Triangle", *selected_shape == UserEvents::RadioTriangle, UserEvents::RadioTriangle),
+                .radio(
+                    "Circle",
+                    *selected_shape == UserEvents::RadioCircle,
+                    UserEvents::RadioCircle,
+                )
+                .radio(
+                    "Square",
+                    *selected_shape == UserEvents::RadioSquare,
+                    UserEvents::RadioSquare,
+                )
+                .radio(
+                    "Triangle",
+                    *selected_shape == UserEvents::RadioTriangle,
+                    UserEvents::RadioTriangle,
+                ),
         )
         .checkable(
             "This checkbox toggles disable",
-            true,
+            check_item_checked,
             UserEvents::CheckItem1,
         )
         .with(MenuItem::Item {
             name: "Item Disabled".into(),
-            disabled: true, // Disabled entry example
+            disabled: disabled_item_disabled,
             id: UserEvents::DisabledItem1,
             icon: disabled_item_icon,
         })
@@ -104,6 +130,8 @@ fn main() {
 
     let selected_color = UserEvents::RadioRed;
     let selected_shape = UserEvents::RadioCircle;
+    let check_item_checked = true;
+    let disabled_item_disabled = true;
 
     // Needlessly complicated tray icon with all the whistles and bells
     let tray_icon = TrayIconBuilder::new()
@@ -117,7 +145,13 @@ fn main() {
         .on_click(UserEvents::LeftClickTrayIcon)
         .on_double_click(UserEvents::DoubleClickTrayIcon)
         .on_right_click(UserEvents::RightClickTrayIcon)
-        .menu(build_menu(&selected_color, &selected_shape, disabled_item_icon.clone()))
+        .menu(build_menu(
+            &selected_color,
+            &selected_shape,
+            check_item_checked,
+            disabled_item_disabled,
+            disabled_item_icon.clone(),
+        ))
         .build()
         .unwrap();
 
@@ -128,6 +162,8 @@ fn main() {
         second_icon,
         selected_color,
         selected_shape,
+        check_item_checked,
+        disabled_item_disabled,
         disabled_item_icon,
     };
     event_loop.run_app(&mut app).unwrap();
@@ -140,6 +176,8 @@ struct MyApplication {
     second_icon: Icon,
     selected_color: UserEvents,
     selected_shape: UserEvents,
+    check_item_checked: bool,
+    disabled_item_disabled: bool,
     disabled_item_icon: Option<Icon>,
 }
 
@@ -186,25 +224,9 @@ impl ApplicationHandler<UserEvents> for MyApplication {
                 self.tray_icon.show_menu().unwrap();
             }
             UserEvents::CheckItem1 => {
-                // You can mutate single checked, disabled value followingly.
-                //
-                // However, I think better way is to use reactively
-                // `set_menu` by building the menu based on application
-                // state.
-                if let Some(old_value) = self
-                    .tray_icon
-                    .get_menu_item_checkable(UserEvents::CheckItem1)
-                {
-                    // Set checkable example
-                    let _ = self
-                        .tray_icon
-                        .set_menu_item_checkable(UserEvents::CheckItem1, !old_value);
-
-                    // Set disabled example
-                    let _ = self
-                        .tray_icon
-                        .set_menu_item_disabled(UserEvents::DisabledItem1, !old_value);
-                }
+                self.check_item_checked = !self.check_item_checked;
+                self.disabled_item_disabled = self.check_item_checked;
+                self.rebuild_menu();
             }
             UserEvents::Item1 => {
                 self.tray_icon.set_icon(&self.second_icon).unwrap();
@@ -240,26 +262,14 @@ impl ApplicationHandler<UserEvents> for MyApplication {
             // the groups are independent (separated by a separator).
             UserEvents::RadioRed | UserEvents::RadioGreen | UserEvents::RadioBlue => {
                 self.selected_color = event.clone();
-                self.tray_icon
-                    .set_menu(&build_menu(
-                        &self.selected_color,
-                        &self.selected_shape,
-                        self.disabled_item_icon.clone(),
-                    ))
-                    .unwrap();
+                self.rebuild_menu();
                 println!("Color selected: {:?}", event);
             }
             // Selecting a shape radio is handled the same way; only the shape
             // group's selection changes, the color group keeps its selection.
             UserEvents::RadioCircle | UserEvents::RadioSquare | UserEvents::RadioTriangle => {
                 self.selected_shape = event.clone();
-                self.tray_icon
-                    .set_menu(&build_menu(
-                        &self.selected_color,
-                        &self.selected_shape,
-                        self.disabled_item_icon.clone(),
-                    ))
-                    .unwrap();
+                self.rebuild_menu();
                 println!("Shape selected: {:?}", event);
             }
             // Events::DoubleClickTrayIcon => todo!(),
@@ -269,5 +279,56 @@ impl ApplicationHandler<UserEvents> for MyApplication {
             // Events::SubItem3 => todo!(),
             _ => {}
         }
+    }
+}
+
+impl MyApplication {
+    fn rebuild_menu(&mut self) {
+        self.tray_icon
+            .set_menu(&build_menu(
+                &self.selected_color,
+                &self.selected_shape,
+                self.check_item_checked,
+                self.disabled_item_disabled,
+                self.disabled_item_icon.clone(),
+            ))
+            .unwrap();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn radio_rebuild_keeps_checkbox_and_disabled_state() {
+        let rebuilt = build_menu(
+            &UserEvents::RadioGreen,
+            &UserEvents::RadioCircle,
+            false,
+            false,
+            None,
+        );
+
+        assert_ne!(
+            rebuilt,
+            build_menu(
+                &UserEvents::RadioGreen,
+                &UserEvents::RadioCircle,
+                true,
+                false,
+                None,
+            )
+        );
+        assert_ne!(
+            rebuilt,
+            build_menu(
+                &UserEvents::RadioGreen,
+                &UserEvents::RadioCircle,
+                false,
+                true,
+                None,
+            )
+        );
     }
 }

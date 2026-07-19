@@ -38,7 +38,10 @@ where
 }
 
 /// Build the tray icon
-pub fn build_trayicon<T>(builder: &TrayIconBuilder<T>) -> Result<TrayIconSys<T>, Error>
+pub fn build_trayicon<T>(
+    builder: &TrayIconBuilder<T>,
+    menu_state: crate::SharedMenu<T>,
+) -> Result<TrayIconSys<T>, Error>
 where
     T: TrayIconEvent,
 {
@@ -52,18 +55,20 @@ where
     let notify_icon = WinNotifyIcon::new(hicon, tooltip);
 
     // Try to get a popup menu
-    if let Some(rhmenu) = &builder.menu {
+    let initial_menu = menu_state.read().map_err(|_| Error::OsError)?.clone();
+    if let Some(rhmenu) = &initial_menu {
         menu = Some(rhmenu.build()?);
     }
 
-    Ok(WinTrayIconImpl::new(
+    WinTrayIconImpl::new(
         sender,
         menu,
         notify_icon,
         on_click,
         on_double_click,
         on_right_click,
-    )?)
+        menu_state,
+    )
 }
 
 /// Build the menu from Windows HMENU
@@ -97,8 +102,7 @@ where
     // Close the in-progress radio run, recording its group for every command
     // id it covers (which are consecutive: `j` advances by exactly one per
     // radio item, and separators consume no id). Defined as a nested `fn` so
-    // it captures nothing and there is no borrow entanglement with the
-    // surrounding `for_each` closure.
+    // it captures nothing and keeps the surrounding loop simple.
     fn close_run(
         run_first: &mut Option<usize>,
         run_last: &mut Option<usize>,
@@ -119,70 +123,71 @@ where
         *run_last = None;
     }
 
-    builder.menu_items.iter().for_each(|item| match item {
-        MenuItem::Submenu {
-            id,
-            name,
-            children,
-            disabled,
-            ..
-        } => {
-            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
-            if let Some(id) = id {
+    for item in &builder.menu_items {
+        match item {
+            MenuItem::Submenu {
+                id,
+                name,
+                children,
+                disabled,
+                ..
+            } => {
+                close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
+                if let Some(id) = id {
+                    *j += 1;
+                    map.insert(*j, id.clone());
+                }
+                let menusys = build_menu_inner(j, children)?;
+                map.extend(menusys.ids);
+                radio.extend(menusys.radio);
+                hmenu.add_child_menu(name, menusys.menu, *disabled);
+            }
+
+            MenuItem::Checkable {
+                name,
+                is_checked,
+                id,
+                disabled,
+                ..
+            } => {
+                close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
                 *j += 1;
                 map.insert(*j, id.clone());
+                hmenu.add_checkable_item(name, *is_checked, *j, *disabled);
             }
-            if let Ok(menusys) = build_menu_inner(j, children) {
-                map.extend(menusys.ids.into_iter());
-                radio.extend(menusys.radio.into_iter());
-                hmenu.add_child_menu(&name, menusys.menu, *disabled);
+
+            MenuItem::Radio {
+                name,
+                is_checked,
+                id,
+                disabled,
+                ..
+            } => {
+                *j += 1;
+                let cmd = *j;
+                map.insert(cmd, id.clone());
+                hmenu.add_radio_item(name, *is_checked, cmd, *disabled);
+                if run_first.is_none() {
+                    run_first = Some(cmd);
+                }
+                run_last = Some(cmd);
+            }
+
+            MenuItem::Item {
+                name, id, disabled, ..
+            } => {
+                close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
+                *j += 1;
+                map.insert(*j, id.clone());
+                hmenu.add_menu_item(name, *j, *disabled);
+            }
+
+            MenuItem::Separator => {
+                close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
+                hmenu.add_separator();
             }
         }
-
-        MenuItem::Checkable {
-            name,
-            is_checked,
-            id,
-            disabled,
-            ..
-        } => {
-            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
-            *j += 1;
-            map.insert(*j, id.clone());
-            hmenu.add_checkable_item(&name, *is_checked, *j, *disabled);
-        }
-
-        MenuItem::Radio {
-            name,
-            is_checked,
-            id,
-            disabled,
-            ..
-        } => {
-            *j += 1;
-            let cmd = *j;
-            map.insert(cmd, id.clone());
-            hmenu.add_radio_item(&name, *is_checked, cmd, *disabled);
-            if run_first.is_none() {
-                run_first = Some(cmd);
-            }
-            run_last = Some(cmd);
-        }
-
-        MenuItem::Item {
-            name, id, disabled, ..
-        } => {
-            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
-            *j += 1;
-            map.insert(*j, id.clone());
-            hmenu.add_menu_item(&name, *j, *disabled);
-        }
-
-        MenuItem::Separator => {
-            close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
-            hmenu.add_separator();
-        }
-    });
+    }
 
     // Close a run that runs to the end of the (sub)menu.
     close_run(&mut run_first, &mut run_last, &mut radio, hmenu_addr);
@@ -215,6 +220,9 @@ pub(crate) mod tests {
         SubSubItem1,
         SubSubItem2,
         SubSubItem3,
+        RadioA,
+        RadioB,
+        RadioC,
     }
 
     #[test]
@@ -251,5 +259,33 @@ pub(crate) mod tests {
         } else {
             panic!()
         }
+    }
+
+    #[test]
+    fn radio_groups_follow_consecutive_runs() {
+        let builder = MenuBuilder::new().submenu(
+            "Radio groups",
+            MenuBuilder::new()
+                .radio("A", true, Events::RadioA)
+                .radio("B", false, Events::RadioB)
+                .separator()
+                .radio("C", true, Events::RadioC),
+        );
+        let menu = build_menu(&builder).unwrap();
+
+        let id_for = |event| {
+            *menu
+                .ids
+                .iter()
+                .find_map(|(id, candidate)| (candidate == &event).then_some(id))
+                .unwrap()
+        };
+        let a = menu.radio[&id_for(Events::RadioA)];
+        let b = menu.radio[&id_for(Events::RadioB)];
+        let c = menu.radio[&id_for(Events::RadioC)];
+
+        assert_eq!((a.hmenu, a.first, a.last), (b.hmenu, b.first, b.last));
+        assert_ne!((a.hmenu, a.first, a.last), (c.hmenu, c.first, c.last));
+        assert_eq!(c.first, c.last);
     }
 }

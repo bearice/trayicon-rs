@@ -65,7 +65,11 @@ fn main() {
                     .separator()
                     .radio("Circle", shape == Events::RadioCircle, Events::RadioCircle)
                     .radio("Square", shape == Events::RadioSquare, Events::RadioSquare)
-                    .radio("Triangle", shape == Events::RadioTriangle, Events::RadioTriangle),
+                    .radio(
+                        "Triangle",
+                        shape == Events::RadioTriangle,
+                        Events::RadioTriangle,
+                    ),
             )
             .with(MenuItem::Item {
                 name: "Item Disabled".into(),
